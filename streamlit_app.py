@@ -8,6 +8,9 @@ import os
 import bcrypt
 
 
+# Load .env file for local development
+load_dotenv(override=True)
+
 def get_env_vars():
     """Load environment variables from st.secrets (Streamlit Cloud) or .env (local)"""
     # Try Streamlit secrets first (for cloud deployment)
@@ -21,7 +24,6 @@ def get_env_vars():
             pass
     
     # Fall back to .env file for local development
-    load_dotenv(override=True)
     return {
         'api_key': os.getenv("OPENAI_API_KEY"),
         'hashed_password': os.getenv("HASHED_PASSWORD", "").encode("utf-8")
@@ -154,44 +156,48 @@ def require_login():
         login_screen()
         st.stop()
 
-@st.cache_resource
 def get_db_url():
+    """Get database URL from Streamlit secrets or environment variables."""
     # Try Streamlit secrets first (for cloud deployment)
-    if hasattr(st, 'secrets') and len(st.secrets) > 0:
-        try:
+    try:
+        if hasattr(st, 'secrets') and len(st.secrets) > 0:
             POSTGRES_SERVER = st.secrets.get("POSTGRES_SERVER", "")
-            if POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://"):
+            if POSTGRES_SERVER and (POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://")):
                 return POSTGRES_SERVER
-            else:
+            elif POSTGRES_SERVER:
                 POSTGRES_USERNAME = st.secrets.get("POSTGRES_USERNAME")
                 POSTGRES_PASSWORD = st.secrets.get("POSTGRES_PASSWORD")
                 POSTGRES_DATABASE = st.secrets.get("POSTGRES_DATABASE")
                 return f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}/{POSTGRES_DATABASE}"
-        except Exception:
-            pass
+    except Exception as e:
+        # Log error for debugging but continue to fallback
+        pass
     
     # Fall back to .env for local development
     POSTGRES_SERVER = os.getenv("POSTGRES_SERVER", "")
     
-    if POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://"):
+    if POSTGRES_SERVER and (POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://")):
         # Already a full URL, use it directly
         return POSTGRES_SERVER
-    else:
+    elif POSTGRES_SERVER:
         # Build the URL from components
         POSTGRES_USERNAME = os.getenv("POSTGRES_USERNAME")
         POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
         POSTGRES_DATABASE = os.getenv("POSTGRES_DATABASE")
         return f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}/{POSTGRES_DATABASE}"
-
-DATABASE_URL = get_db_url()
+    
+    # If nothing works, return None and let connection fail with clear error
+    return None
 
 
 @st.cache_resource
 def get_db_connection():
-
     """Create and cache database connection."""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        db_url = get_db_url()
+        if not db_url:
+            raise Exception("Database URL not configured. Please check your secrets or .env file.")
+        conn = psycopg2.connect(db_url)
         return conn
     except Exception as e:
         st.error(f"Failed to connect to database: {e}")
