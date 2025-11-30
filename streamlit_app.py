@@ -8,65 +8,83 @@ import os
 import bcrypt
 
 
-load_dotenv()  # reads variables from a .env file and sets them in os.environ
+def get_env_vars():
+    """Load environment variables fresh each time to avoid caching issues"""
+    load_dotenv(override=True)  # Force reload of .env file
+    return {
+        'api_key': os.getenv("OPENAI_API_KEY"),
+        'hashed_password': os.getenv("HASHED_PASSWORD", "").encode("utf-8")
+    }
 
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-HASHED_PASSWORD = st.secrets["HASHED_PASSWORD"].encode("utf-8")
+# Get environment variables
+env_vars = get_env_vars()
+OPENAI_API_KEY = env_vars['api_key']
+HASHED_PASSWORD = env_vars['hashed_password']
 
 
 # Database schema for context
 DATABASE_SCHEMA = """
 Database Schema:
 
-LOOKUP TABLES:
-- genders (gender_id SERIAL PRIMARY KEY, gender_desc TEXT)
-- races (race_id SERIAL PRIMARY KEY, race_desc TEXT)
-- marital_statuses (marital_status_id SERIAL PRIMARY KEY, marital_status_desc TEXT)
-- languages (language_id SERIAL PRIMARY KEY, language_desc TEXT)
-- lab_units (unit_id SERIAL PRIMARY KEY, unit_string TEXT)
-- lab_tests (lab_test_id SERIAL PRIMARY KEY, lab_name TEXT, unit_id INTEGER)
-- diagnosis_codes (diagnosis_code TEXT PRIMARY KEY, diagnosis_description TEXT)
-
-CORE TABLES:
-- patients (
-    patient_id TEXT PRIMARY KEY,
-    patient_gender INTEGER (FK to genders),
-    patient_dob TIMESTAMP,
-    patient_race INTEGER (FK to races),
-    patient_marital_status INTEGER (FK to marital_statuses),
-    patient_language INTEGER (FK to languages),
-    patient_population_pct_below_poverty REAL
+DIMENSION/LOOKUP TABLES:
+- Region (
+    RegionID SERIAL PRIMARY KEY,
+    Region TEXT NOT NULL UNIQUE
   )
 
-- admissions (
-    patient_id TEXT,
-    admission_id INTEGER,
-    admission_start TIMESTAMP,
-    admission_end TIMESTAMP,
-    PRIMARY KEY (patient_id, admission_id)
+- Country (
+    CountryID SERIAL PRIMARY KEY,
+    Country TEXT NOT NULL UNIQUE,
+    RegionID INTEGER (FK to Region)
   )
 
-- admission_primary_diagnoses (
-    patient_id TEXT,
-    admission_id INTEGER,
-    diagnosis_code TEXT (FK to diagnosis_codes),
-    PRIMARY KEY (patient_id, admission_id)
+- ProductCategory (
+    ProductCategoryID SERIAL PRIMARY KEY,
+    ProductCategory TEXT NOT NULL UNIQUE,
+    ProductCategoryDescription TEXT
   )
 
-- admission_lab_results (
-    patient_id TEXT,
-    admission_id INTEGER,
-    lab_test_id INTEGER (FK to lab_tests),
-    lab_value REAL,
-    lab_datetime TIMESTAMP
+ENTITY TABLES:
+- Customer (
+    CustomerID SERIAL PRIMARY KEY,
+    FirstName TEXT NOT NULL,
+    LastName TEXT NOT NULL,
+    Address TEXT,
+    City TEXT,
+    CountryID INTEGER (FK to Country)
+  )
+
+- Product (
+    ProductID SERIAL PRIMARY KEY,
+    ProductName TEXT NOT NULL UNIQUE,
+    ProductUnitPrice REAL NOT NULL,
+    ProductCategoryID INTEGER (FK to ProductCategory)
+  )
+
+FACT TABLE:
+- OrderDetail (
+    OrderID SERIAL PRIMARY KEY,
+    CustomerID INTEGER (FK to Customer),
+    ProductID INTEGER (FK to Product),
+    OrderDate DATE NOT NULL,
+    QuantityOrdered INTEGER NOT NULL
   )
 
 IMPORTANT NOTES:
-- Use JOINs to get descriptive values from lookup tables
-- patient_dob, admission_start, admission_end, and lab_datetime are TIMESTAMP types
-- To calculate age: EXTRACT(YEAR FROM AGE(patient_dob))
-- To calculate length of stay: EXTRACT(EPOCH FROM (admission_end - admission_start)) / 86400 (gives days)
+- Use JOINs to get descriptive values from dimension tables
+- OrderDate is DATE type - use DATE functions for filtering and grouping
+- To calculate revenue: ProductUnitPrice * QuantityOrdered
+- To get quarters: EXTRACT(QUARTER FROM OrderDate)
+- To get year: EXTRACT(YEAR FROM OrderDate)
+- To get month: EXTRACT(MONTH FROM OrderDate)
 - Always use proper JOINs for foreign key relationships
+- Full customer name: FirstName || ' ' || LastName
+
+POSTGRESQL GROUP BY RULES (CRITICAL):
+- When using aggregate functions (SUM, COUNT, AVG, etc.), ALL non-aggregated columns in SELECT must be in GROUP BY
+- Example: If you SELECT FirstName, LastName, and use SUM(), you must GROUP BY CustomerID, FirstName, LastName
+- Correct: GROUP BY c.CustomerID, c.FirstName, c.LastName
+- Wrong: GROUP BY c.CustomerID (if selecting FirstName and LastName)
 """
 
 
@@ -85,15 +103,28 @@ def login_screen():
     
     if login_btn:
         if password:
-            try:
-                if bcrypt.checkpw(password.encode('utf-8'), HASHED_PASSWORD):
-                    st.session_state.logged_in = True
-                    st.success("✅ Authentication successful! Redirecting...")
-                    st.rerun()
-                else:
-                    st.error("❌ Incorrect password")
-            except Exception as e:
-                st.error(f"❌ Authentication error: {e}")
+            # Reload env vars fresh for authentication
+            load_dotenv(override=True)
+            hashed_pw = os.getenv("HASHED_PASSWORD", "").encode("utf-8")
+            
+            if not hashed_pw or len(hashed_pw) < 10:
+                st.error("❌ Configuration Error: HASHED_PASSWORD not set in .env file!")
+                st.info("Please add HASHED_PASSWORD to your .env file. Run `python debug_password.py` to generate and test one.")
+            else:
+                try:
+                    if bcrypt.checkpw(password.encode('utf-8'), hashed_pw):
+                        st.session_state.logged_in = True
+                        st.success("✅ Authentication successful! Redirecting...")
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect password")
+                        st.info("Default password is: admin123")
+                except ValueError as e:
+                    st.error(f"❌ Configuration Error: Invalid HASHED_PASSWORD format in .env file!")
+                    st.info("Run `python debug_password.py` to generate a valid hash.")
+                except Exception as e:
+                    st.error(f"❌ Authentication error: {type(e).__name__}: {e}")
+                    st.info("Run `python debug_password.py` to diagnose the issue.")
         else:
             st.warning("⚠️ Please enter a password")
     
@@ -114,14 +145,18 @@ def require_login():
 
 @st.cache_resource
 def get_db_url():
-    POSTGRES_USERNAME = st.secrets["POSTGRES_USERNAME"]
-    POSTGRES_PASSWORD = st.secrets["POSTGRES_PASSWORD"]
-    POSTGRES_SERVER = st.secrets["POSTGRES_SERVER"]
-    POSTGRES_DATABASE = st.secrets["POSTGRES_DATABASE"]
-
-    DATABASE_URL = f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}/{POSTGRES_DATABASE}"
-
-    return DATABASE_URL
+    # Check if POSTGRES_SERVER is already a full URL
+    POSTGRES_SERVER = os.getenv("POSTGRES_SERVER", "")
+    
+    if POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://"):
+        # Already a full URL, use it directly
+        return POSTGRES_SERVER
+    else:
+        # Build the URL from components
+        POSTGRES_USERNAME = os.getenv("POSTGRES_USERNAME")
+        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+        POSTGRES_DATABASE = os.getenv("POSTGRES_DATABASE")
+        return f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}/{POSTGRES_DATABASE}"
 
 DATABASE_URL = get_db_url()
 
@@ -174,9 +209,11 @@ Requirements:
 2. Use proper JOINs to get descriptive names from lookup tables
 3. Use appropriate aggregations (COUNT, AVG, SUM, etc.) when needed
 4. Add LIMIT clauses for queries that might return many rows (default LIMIT 100)
-5. Use proper date/time functions for TIMESTAMP columns
+5. Use proper date/time functions for DATE columns
 6. Make sure the query is syntactically correct for PostgreSQL
 7. Add helpful column aliases using AS
+8. CRITICAL: When using aggregate functions, include ALL non-aggregated columns in GROUP BY clause
+   Example: SELECT FirstName, LastName, SUM(amount) ... GROUP BY CustomerID, FirstName, LastName
 
 Generate the SQL query:"""
 
@@ -200,8 +237,8 @@ Generate the SQL query:"""
 
 def main():
     require_login()
-    st.title("🤖 AI-Powered SQL Query Assistant")
-    st.markdown("Ask questions in natural language, and I will generate SQL queries for you to review and run!")
+    st.title("🤖 AI-Powered Sales Analytics Assistant")
+    st.markdown("Ask questions about sales, orders, customers, and products in natural language!")
     st.markdown("---")
 
 
@@ -209,15 +246,22 @@ def main():
     st.sidebar.markdown("""
     Try asking questions like:
                         
-    **Demographics:**
-    - How many patients do we have by gender?
+    **Sales Analysis:**
+    - What is the total revenue by region?
+    - Who are the top 10 customers by total spending?
+    - What are the monthly sales trends?
                         
-    **Admissions:**
-    - What is the average length of stay?                      
+    **Product Analysis:**
+    - Which products generate the most revenue?
+    - What is the average order value by product category?
+                        
+    **Customer Insights:**
+    - How many customers do we have by country?
+    - Which customers haven't ordered in the last 90 days?
     """)
     st.sidebar.markdown("---")
     st.sidebar.info("""
-        🩼**How it works:**
+        📈 **How it works:**
         1. Enter your question in plain English
         2. AI generates SQL query
         3. Review and optionally edit the query
@@ -242,9 +286,9 @@ def main():
     # main input
 
     user_question = st.text_area(
-        " What would you like to know?",
+        "📊 What would you like to know?",
         height=100, 
-        placeholder="What is the average length of stay?    "
+        placeholder="e.g., What is the total revenue by region? or Who are the top 5 customers?"
     )
 
     col1, col2, col3 = st.columns([1, 1, 4])
@@ -311,11 +355,11 @@ def main():
         st.subheader("📜 Query History")
         for idx, item in enumerate(reversed(st.session_state.query_history[-5:])):
             with st.expander(f"Query {len(st.session_state.query_history)-idx}: {item['question'][:60]}..."):
-                st.markdown(f"**Question:** {item["question"]}")
-                st.code(item["sql"], language="sql")
-                st.caption(f"Returned {item["rows"]} rows")
+                st.markdown(f"**Question:** {item['question']}")
+                st.code(item['sql'], language="sql")
+                st.caption(f"Returned {item['rows']} rows")
                 if st.button(f"Re-run this query", key=f"rerun_{idx}"):
-                    df = run_query(item["sql"])
+                    df = run_query(item['sql'])
                     if df is not None:
                         st.dataframe(df, width="stretch")
 

@@ -10,382 +10,682 @@ from utils import get_db_url
 
 STAGING_CREATE_SQL = """
 -- Drop existing tables if they exist (in correct order due to foreign keys)
-DROP TABLE IF EXISTS admission_lab_results CASCADE;
-DROP TABLE IF EXISTS admission_primary_diagnoses CASCADE;
-DROP TABLE IF EXISTS admissions CASCADE;
-DROP TABLE IF EXISTS patients CASCADE;
-DROP TABLE IF EXISTS lab_tests CASCADE;
-DROP TABLE IF EXISTS diagnosis_codes CASCADE;
-DROP TABLE IF EXISTS lab_units CASCADE;
-DROP TABLE IF EXISTS languages CASCADE;
-DROP TABLE IF EXISTS marital_statuses CASCADE;
-DROP TABLE IF EXISTS races CASCADE;
-DROP TABLE IF EXISTS genders CASCADE;
-DROP TABLE IF EXISTS stage_labs CASCADE;
-DROP TABLE IF EXISTS stage_diagnoses CASCADE;
-DROP TABLE IF EXISTS stage_admissions CASCADE;
-DROP TABLE IF EXISTS stage_patients CASCADE;
+DROP TABLE IF EXISTS OrderDetail CASCADE;
+DROP TABLE IF EXISTS Product CASCADE;
+DROP TABLE IF EXISTS ProductCategory CASCADE;
+DROP TABLE IF EXISTS Customer CASCADE;
+DROP TABLE IF EXISTS Country CASCADE;
+DROP TABLE IF EXISTS Region CASCADE;
 
--- Staging tables
-CREATE TABLE stage_patients (
-    PatientID                              TEXT, 
-    PatientGender                          TEXT, 
-    PatientDateOfBirth                     TIMESTAMP, 
-    PatientRace                            TEXT, 
-    PatientMaritalStatus                   TEXT, 
-    PatientLanguage                        TEXT, 
-    PatientPopulationPercentageBelowPoverty TEXT
+-- Lookup/Dimension tables
+CREATE TABLE Region (
+    RegionID SERIAL PRIMARY KEY,
+    Region TEXT NOT NULL UNIQUE
 );
 
-CREATE TABLE stage_admissions (
-    PatientID                              TEXT, 
-    AdmissionID                            TEXT, 
-    AdmissionStartDate                     TIMESTAMP, 
-    AdmissionEndDate                       TIMESTAMP
+CREATE TABLE Country (
+    CountryID SERIAL PRIMARY KEY,
+    Country TEXT NOT NULL UNIQUE,
+    RegionID INTEGER NOT NULL,
+    FOREIGN KEY (RegionID) REFERENCES Region(RegionID)
 );
 
-CREATE TABLE stage_diagnoses (
-    PatientID                              TEXT, 
-    AdmissionID                            TEXT, 
-    PrimaryDiagnosisCode                   TEXT, 
-    PrimaryDiagnosisDescription            TEXT
+CREATE TABLE ProductCategory (
+    ProductCategoryID SERIAL PRIMARY KEY,
+    ProductCategory TEXT NOT NULL UNIQUE,
+    ProductCategoryDescription TEXT
 );
 
-CREATE TABLE stage_labs (
-    PatientID                              TEXT, 
-    AdmissionID                            TEXT, 
-    LabName                                TEXT, 
-    LabValue                               TEXT,
-    LabUnits                               TEXT,
-    LabDateTime                            TIMESTAMP
+-- Entity tables
+CREATE TABLE Customer (
+    CustomerID SERIAL PRIMARY KEY,
+    FirstName TEXT NOT NULL,
+    LastName TEXT NOT NULL,
+    Address TEXT,
+    City TEXT,
+    CountryID INTEGER,
+    FOREIGN KEY (CountryID) REFERENCES Country(CountryID)
 );
 
--- Lookup tables
-CREATE TABLE genders (
-    gender_id   SERIAL PRIMARY KEY,
-    gender_desc TEXT NOT NULL UNIQUE
+CREATE TABLE Product (
+    ProductID SERIAL PRIMARY KEY,
+    ProductName TEXT NOT NULL UNIQUE,
+    ProductUnitPrice REAL NOT NULL,
+    ProductCategoryID INTEGER NOT NULL,
+    FOREIGN KEY (ProductCategoryID) REFERENCES ProductCategory(ProductCategoryID)
 );
 
-CREATE TABLE races (
-    race_id     SERIAL PRIMARY KEY,
-    race_desc   TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE marital_statuses (
-    marital_status_id   SERIAL PRIMARY KEY,
-    marital_status_desc TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE languages (
-    language_id SERIAL PRIMARY KEY,
-    language_desc TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE lab_units (
-    unit_id     SERIAL PRIMARY KEY,
-    unit_string TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE lab_tests (
-    lab_test_id SERIAL PRIMARY KEY,
-    lab_name    TEXT NOT NULL UNIQUE,
-    unit_id     INTEGER NOT NULL,
-    FOREIGN KEY (unit_id) REFERENCES lab_units(unit_id)
-);
-
-CREATE TABLE diagnosis_codes (
-    diagnosis_code        TEXT PRIMARY KEY,
-    diagnosis_description TEXT NOT NULL
-);
-
--- Core tables
-CREATE TABLE patients (
-    patient_id     TEXT PRIMARY KEY,
-    patient_gender INTEGER,
-    patient_dob    TIMESTAMP NOT NULL,
-    patient_race   INTEGER,
-    patient_marital_status INTEGER,
-    patient_language INTEGER,
-    patient_population_pct_below_poverty REAL,
-    FOREIGN KEY (patient_gender) REFERENCES genders(gender_id),
-    FOREIGN KEY (patient_race) REFERENCES races(race_id),
-    FOREIGN KEY (patient_marital_status) REFERENCES marital_statuses(marital_status_id),
-    FOREIGN KEY (patient_language) REFERENCES languages(language_id)
-);
-
-CREATE TABLE admissions (
-    patient_id      TEXT NOT NULL,
-    admission_id    INTEGER NOT NULL,
-    admission_start TIMESTAMP NOT NULL,
-    admission_end   TIMESTAMP,
-    PRIMARY KEY (patient_id, admission_id),
-    FOREIGN KEY (patient_id) REFERENCES patients(patient_id)
-);
-
-CREATE TABLE admission_primary_diagnoses (
-    patient_id     TEXT NOT NULL,
-    admission_id   INTEGER NOT NULL,
-    diagnosis_code TEXT NOT NULL,
-    PRIMARY KEY (patient_id, admission_id),
-    FOREIGN KEY (patient_id, admission_id) REFERENCES admissions(patient_id, admission_id),
-    FOREIGN KEY (diagnosis_code) REFERENCES diagnosis_codes(diagnosis_code)
-);
-
-CREATE TABLE admission_lab_results (
-    patient_id    TEXT NOT NULL,
-    admission_id  INTEGER NOT NULL,
-    lab_test_id   INTEGER NOT NULL,
-    lab_value     REAL,
-    lab_datetime  TIMESTAMP NOT NULL,
-    FOREIGN KEY (patient_id, admission_id) REFERENCES admissions(patient_id, admission_id),
-    FOREIGN KEY (lab_test_id) REFERENCES lab_tests(lab_test_id),
-    UNIQUE (patient_id, admission_id, lab_test_id, lab_datetime)
+-- Fact table
+CREATE TABLE OrderDetail (
+    OrderID SERIAL PRIMARY KEY,
+    CustomerID INTEGER NOT NULL,
+    ProductID INTEGER NOT NULL,
+    OrderDate DATE NOT NULL,
+    QuantityOrdered INTEGER NOT NULL,
+    FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID),
+    FOREIGN KEY (ProductID) REFERENCES Product(ProductID)
 );
 """
 
+# Note: You'll need to provide the data file. Expected format is TSV with these columns:
 FILES = {
-    "patients": {
-        "filename": "PatientCorePopulatedTable.txt",
-     },
-    "admissions": {
-        "filename": "AdmissionsCorePopulatedTable.txt",
-     },
-    "diagnoses": {
-        "filename": "AdmissionsDiagnosesCorePopulatedTable.txt",
-     },
-    "labs": {
-        "filename": "LabsCorePopulatedTable.txt",
-        "batch_size": 100_000,
-     }
+    "orders": {
+        "filename": "orders_data.txt",  # TSV file with all order data
+        "batch_size": 5_000,
+    }
 }
 
-EXPECTED_COLUMNS = {
-    "patients": [
-        "PatientID",
-        "PatientGender",
-        "PatientDateOfBirth",
-        "PatientRace",
-        "PatientMaritalStatus",
-        "PatientLanguage",
-        "PatientPopulationPercentageBelowPoverty",
-    ],
-    "admissions": [
-        "PatientID",
-        "AdmissionID",
-        "AdmissionStartDate",
-        "AdmissionEndDate",
-    ],
-    "diagnoses": [
-        "PatientID", 
-        "AdmissionID", 
-        "PrimaryDiagnosisCode", 
-        "PrimaryDiagnosisDescription",               
-    ],
-    "labs": [
-        "PatientID",
-        "AdmissionID",
-        "LabName",
-        "LabValue",
-        "LabUnits",
-        "LabDateTime",
-    ]
-}
+EXPECTED_COLUMNS = [
+    "Name",
+    "Address", 
+    "City",
+    "Country",
+    "Region",
+    "ProductName",
+    "ProductCategory",
+    "ProductUnitPrice",
+    "QuantityOrderded",  # Note: typo matches your original code
+    "OrderDate"
+]
 
-def load_tsv_to_stage(conn, filepath, stage_table, expected_columns, batch_size=5_000):
+
+def create_connection(db_url):
+    """Create a database connection to PostgreSQL"""
+    try:
+        conn = psycopg2.connect(db_url)
+        return conn
+    except Exception as e:
+        print(f"Error connecting to database: {e}")
+        return None
+
+
+def build_dimensions_from_data(conn, filepath):
+    """
+    Parse the data file and populate dimension tables:
+    - Region
+    - Country (with RegionID foreign key)
+    - ProductCategory
+    """
     path = Path(filepath)
     if not path.exists():
-        raise FileNotFoundError(f"Missing file: {filepath}")
-
-    with path.open("r", encoding="utf-8-sig") as csvfile:
-        csv_reader = csv.DictReader(csvfile, delimiter='\t')
-        # validate columns
-        missing = sorted(set(expected_columns) - set(csv_reader.fieldnames))
-        if missing:
-            raise ValueError(f"{filepath} missing expected columns: {missing}")
-
-        placeholders = ", ".join(["%s"] * len(expected_columns))
-        sql = f"INSERT INTO {stage_table} ({', '.join(expected_columns)}) VALUES ({placeholders})"
-        rows = []
-        row_count = 0 
-        total_count = 0
-        cursor = conn.cursor()
-        
-        cursor.execute(f"DELETE FROM {stage_table}")
-        conn.commit()
-        print(f"Cleaned up rows from {stage_table}")
-        
-        log_template = "Inserted another batch of {:,} rows; total: {:,}"
-        for row in csv_reader:
-            rows.append([row.get(c, None) for c in expected_columns])
-            row_count += 1
-
-            if row_count == batch_size:
-                extras.execute_batch(cursor, sql, rows)
-                conn.commit()
-                total_count += len(rows)
-                row_count = 0 
-                rows = []  
-                print(log_template.format(batch_size, total_count))
-
-        if rows:
-            extras.execute_batch(cursor, sql, rows)
-            conn.commit()
-            total_count += len(rows)  
-            print(log_template.format(len(rows), total_count))
-
-        cursor.close()
-        print(f"Finished loading data into {stage_table}")
-
-
-def build_dimensions(conn):
+        print(f"Warning: Data file not found: {filepath}")
+        return
+    
     cur = conn.cursor()
     
-    # Genders
-    cur.execute("""
-        INSERT INTO genders(gender_desc)
-        SELECT DISTINCT PatientGender FROM stage_patients 
-        WHERE PatientGender IS NOT NULL AND PatientGender <> ''
-        ON CONFLICT (gender_desc) DO NOTHING;
-    """)
+    # Collect unique values
+    regions = set()
+    countries_regions = set()  # (Country, Region) pairs
+    product_categories = {}  # ProductCategory -> Description
     
-    # Races
-    cur.execute("""
-        INSERT INTO races(race_desc)
-        SELECT DISTINCT PatientRace FROM stage_patients 
-        WHERE PatientRace IS NOT NULL AND PatientRace <> ''
-        ON CONFLICT (race_desc) DO NOTHING;
-    """)
+    with path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            region = row.get('Region', '').strip()
+            country = row.get('Country', '').strip()
+            prod_cat = row.get('ProductCategory', '').strip()
+            
+            if region:
+                regions.add(region)
+            if country and region:
+                countries_regions.add((country, region))
+            
+            # Handle multiple product categories (semicolon-separated)
+            if prod_cat:
+                for cat in prod_cat.split(';'):
+                    cat = cat.strip()
+                    if cat and cat not in product_categories:
+                        product_categories[cat] = cat  # Using category as description
     
-    # Marital statuses
-    cur.execute("""
-        INSERT INTO marital_statuses(marital_status_desc)
-        SELECT DISTINCT PatientMaritalStatus FROM stage_patients 
-        WHERE PatientMaritalStatus IS NOT NULL AND PatientMaritalStatus <> ''
-        ON CONFLICT (marital_status_desc) DO NOTHING;
-    """)
-    
-    # Languages
-    cur.execute("""
-        INSERT INTO languages(language_desc)
-        SELECT DISTINCT PatientLanguage FROM stage_patients 
-        WHERE PatientLanguage IS NOT NULL AND PatientLanguage <> ''
-        ON CONFLICT (language_desc) DO NOTHING;
-    """)
-    
-    # Lab units
-    cur.execute("""
-        INSERT INTO lab_units(unit_string)
-        SELECT DISTINCT LabUnits FROM stage_labs 
-        WHERE LabUnits IS NOT NULL AND LabUnits <> ''
-        ON CONFLICT (unit_string) DO NOTHING;
-    """)
-    
-    # Lab tests (LabName -> Unit)
-    cur.execute("""
-        INSERT INTO lab_tests(lab_name, unit_id)
-        SELECT DISTINCT s.LabName, u.unit_id
-        FROM stage_labs s
-        JOIN lab_units u ON u.unit_string = s.LabUnits
-        WHERE s.LabName IS NOT NULL AND s.LabName <> ''
-        ON CONFLICT (lab_name) DO NOTHING;
-    """)
-    
-    # Diagnosis codes
-    cur.execute("""
-        INSERT INTO diagnosis_codes(diagnosis_code, diagnosis_description)
-        SELECT DISTINCT PrimaryDiagnosisCode, PrimaryDiagnosisDescription
-        FROM stage_diagnoses
-        WHERE PrimaryDiagnosisCode IS NOT NULL AND PrimaryDiagnosisCode <> ''
-        ON CONFLICT (diagnosis_code) DO NOTHING;
-    """)
-    
-    conn.commit()
-    cur.close()
-    print("Dimension tables populated")
-
-
-def load_entities(conn):
-    cur = conn.cursor()
-    
-    # Patients
-    cur.execute("""
-        INSERT INTO patients (
-            patient_id, patient_gender, patient_dob, patient_race,
-            patient_marital_status, patient_language, patient_population_pct_below_poverty
+    # Insert Regions
+    if regions:
+        regions_list = [(r,) for r in sorted(regions)]
+        extras.execute_batch(
+            cur,
+            "INSERT INTO Region(Region) VALUES (%s) ON CONFLICT (Region) DO NOTHING;",
+            regions_list
         )
-        SELECT
-            s.PatientID,
-            g.gender_id,
-            s.PatientDateOfBirth,
-            r.race_id,
-            m.marital_status_id,
-            l.language_id,
-            NULLIF(s.PatientPopulationPercentageBelowPoverty, '')::REAL
-        FROM stage_patients s
-        LEFT JOIN genders g ON g.gender_desc = s.PatientGender
-        LEFT JOIN races r ON r.race_desc = s.PatientRace
-        LEFT JOIN marital_statuses m ON m.marital_status_desc = s.PatientMaritalStatus
-        LEFT JOIN languages l ON l.language_desc = s.PatientLanguage
-        ON CONFLICT (patient_id) DO NOTHING;
-    """)
     
-    # Admissions
-    cur.execute("""
-        INSERT INTO admissions (patient_id, admission_id, admission_start, admission_end)
-        SELECT
-            s.PatientID,
-            s.AdmissionID::INTEGER,
-            s.AdmissionStartDate,
-            s.AdmissionEndDate
-        FROM stage_admissions s
-        ON CONFLICT (patient_id, admission_id) DO NOTHING;
-    """)
+    # Get Region mapping
+    cur.execute("SELECT RegionID, Region FROM Region;")
+    region_map = {row[1]: row[0] for row in cur.fetchall()}
+    
+    # Insert Countries
+    if countries_regions:
+        countries_list = [(c, region_map.get(r)) for c, r in sorted(countries_regions) if region_map.get(r)]
+        extras.execute_batch(
+            cur,
+            "INSERT INTO Country(Country, RegionID) VALUES (%s, %s) ON CONFLICT (Country) DO NOTHING;",
+            countries_list
+        )
+    
+    # Insert ProductCategories
+    if product_categories:
+        cat_list = [(cat, desc) for cat, desc in sorted(product_categories.items())]
+        extras.execute_batch(
+            cur,
+            "INSERT INTO ProductCategory(ProductCategory, ProductCategoryDescription) VALUES (%s, %s) ON CONFLICT (ProductCategory) DO NOTHING;",
+            cat_list
+        )
     
     conn.commit()
     cur.close()
-    print("Entity tables populated")
+    print("Dimension tables populated (Region, Country, ProductCategory)")
 
 
-def build_facts(conn):
+def load_customers(conn, filepath):
+    """
+    Parse the data file and populate Customer table
+    """
+    path = Path(filepath)
+    if not path.exists():
+        print(f"Warning: Data file not found: {filepath}")
+        return
+    
     cur = conn.cursor()
     
-    # Primary diagnoses
-    cur.execute("""
-        INSERT INTO admission_primary_diagnoses (patient_id, admission_id, diagnosis_code)
-        SELECT
-            s.PatientID,
-            s.AdmissionID::INTEGER,
-            s.PrimaryDiagnosisCode
-        FROM stage_diagnoses s
-        JOIN diagnosis_codes d ON d.diagnosis_code = s.PrimaryDiagnosisCode
-        ON CONFLICT (patient_id, admission_id) DO NOTHING;
-    """)
+    # Get Country mapping
+    cur.execute("SELECT CountryID, Country FROM Country;")
+    country_map = {row[1]: row[0] for row in cur.fetchall()}
     
-    # Lab results
-    cur.execute("""
-        INSERT INTO admission_lab_results (
-            patient_id, admission_id, lab_test_id, lab_value, lab_datetime
+    # Collect unique customers
+    customers = {}  # (FirstName, LastName) -> (Address, City, Country)
+    
+    with path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            name = row.get('Name', '').strip()
+            address = row.get('Address', '').strip()
+            city = row.get('City', '').strip()
+            country = row.get('Country', '').strip()
+            
+            if name:
+                # Split name into first and last
+                parts = name.split(' ', 1)
+                if len(parts) == 2:
+                    first_name, last_name = parts
+                else:
+                    first_name = parts[0]
+                    last_name = ''
+                
+                key = (first_name, last_name)
+                if key not in customers:
+                    customers[key] = (address, city, country)
+    
+    # Insert customers
+    customer_list = []
+    for (fname, lname), (addr, city, country) in sorted(customers.items()):
+        country_id = country_map.get(country)
+        customer_list.append((fname, lname, addr, city, country_id))
+    
+    if customer_list:
+        extras.execute_batch(
+            cur,
+            "INSERT INTO Customer(FirstName, LastName, Address, City, CountryID) VALUES (%s, %s, %s, %s, %s);",
+            customer_list
         )
-        SELECT
-            s.PatientID,
-            s.AdmissionID::INTEGER,
-            lt.lab_test_id,
-            NULLIF(s.LabValue, '')::REAL,
-            s.LabDateTime
-        FROM stage_labs s
-        JOIN lab_tests lt ON lt.lab_name = s.LabName
-        ON CONFLICT (patient_id, admission_id, lab_test_id, lab_datetime) DO NOTHING;
-    """)
     
     conn.commit()
     cur.close()
-    print("Fact tables populated")
+    print(f"Customer table populated with {len(customer_list)} customers")
+
+
+def load_products(conn, filepath):
+    """
+    Parse the data file and populate Product table
+    """
+    path = Path(filepath)
+    if not path.exists():
+        print(f"Warning: Data file not found: {filepath}")
+        return
+    
+    cur = conn.cursor()
+    
+    # Get ProductCategory mapping
+    cur.execute("SELECT ProductCategoryID, ProductCategory FROM ProductCategory;")
+    cat_map = {row[1]: row[0] for row in cur.fetchall()}
+    
+    # Collect unique products
+    products = set()  # (ProductName, ProductUnitPrice, ProductCategoryID)
+    
+    with path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            prod_names = row.get('ProductName', '').strip()
+            prod_cats = row.get('ProductCategory', '').strip()
+            prod_prices = row.get('ProductUnitPrice', '').strip()
+            
+            if not (prod_names and prod_cats and prod_prices):
+                continue
+            
+            # Handle semicolon-separated values
+            names = [p.strip() for p in prod_names.split(';')]
+            cats = [c.strip() for c in prod_cats.split(';')]
+            prices = [p.strip() for p in prod_prices.split(';')]
+            
+            for name, cat, price in zip(names, cats, prices):
+                if name and cat and price:
+                    try:
+                        price_val = float(price)
+                        cat_id = cat_map.get(cat)
+                        if cat_id:
+                            products.add((name, price_val, cat_id))
+                    except ValueError:
+                        continue
+    
+    # Insert products
+    product_list = [(name, price, cat_id) for name, price, cat_id in sorted(products)]
+    
+    if product_list:
+        extras.execute_batch(
+            cur,
+            "INSERT INTO Product(ProductName, ProductUnitPrice, ProductCategoryID) VALUES (%s, %s, %s) ON CONFLICT (ProductName) DO NOTHING;",
+            product_list
+        )
+    
+    conn.commit()
+    cur.close()
+    print(f"Product table populated with {len(product_list)} products")
+
+
+def load_orders(conn, filepath):
+    """
+    Parse the data file and populate OrderDetail table
+    """
+    path = Path(filepath)
+    if not path.exists():
+        print(f"Warning: Data file not found: {filepath}")
+        return
+    
+    cur = conn.cursor()
+    
+    # Get Customer mapping (FirstName LastName -> CustomerID)
+    cur.execute("SELECT CustomerID, FirstName, LastName FROM Customer;")
+    customer_map = {f"{row[1]} {row[2]}": row[0] for row in cur.fetchall()}
+    
+    # Get Product mapping
+    cur.execute("SELECT ProductID, ProductName FROM Product;")
+    product_map = {row[1]: row[0] for row in cur.fetchall()}
+    
+    # Collect orders
+    orders = []
+    
+    with path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            name = row.get('Name', '').strip()
+            prod_names = row.get('ProductName', '').strip()
+            quantities = row.get('QuantityOrderded', '').strip()  # Note: typo in original
+            dates = row.get('OrderDate', '').strip()
+            
+            customer_id = customer_map.get(name)
+            if not customer_id:
+                continue
+            
+            if not (prod_names and quantities and dates):
+                continue
+            
+            # Handle semicolon-separated values
+            names_list = [p.strip() for p in prod_names.split(';')]
+            qty_list = [q.strip() for q in quantities.split(';')]
+            date_list = [d.strip() for d in dates.split(';')]
+            
+            for pname, qty, date in zip(names_list, qty_list, date_list):
+                if pname and qty and date:
+                    product_id = product_map.get(pname)
+                    if not product_id:
+                        continue
+                    
+                    try:
+                        qty_val = int(qty)
+                        # Convert date from YYYYMMDD to YYYY-MM-DD
+                        if len(date) == 8:
+                            formatted_date = f"{date[0:4]}-{date[4:6]}-{date[6:8]}"
+                        else:
+                            formatted_date = date
+                        
+                        orders.append((customer_id, product_id, formatted_date, qty_val))
+                    except (ValueError, IndexError):
+                        continue
+    
+    # Insert orders
+    if orders:
+        extras.execute_batch(
+            cur,
+            "INSERT INTO OrderDetail(CustomerID, ProductID, OrderDate, QuantityOrdered) VALUES (%s, %s, %s, %s);",
+            orders
+        )
+    
+    conn.commit()
+    cur.close()
+    print(f"OrderDetail table populated with {len(orders)} orders")
+
+
+# SQL Query Functions
+def ex1(conn, CustomerName):
+    """
+    Fetch all order details for a given CustomerName
+    Returns: Name, ProductName, OrderDate, ProductUnitPrice, QuantityOrdered, Total
+    """
+    sql_statement = """
+    SELECT 
+        C.FirstName || ' ' || C.LastName AS Name,
+        P.ProductName,
+        O.OrderDate,
+        P.ProductUnitPrice,
+        O.QuantityOrdered,
+        ROUND(CAST(P.ProductUnitPrice * O.QuantityOrdered AS NUMERIC), 2) AS Total
+    FROM OrderDetail O
+    JOIN Customer C ON O.CustomerID = C.CustomerID
+    JOIN Product P ON O.ProductID = P.ProductID
+    WHERE C.FirstName || ' ' || C.LastName = %s
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement, (CustomerName,))
+    return cur.fetchall()
+
+
+def ex2(conn, CustomerName):
+    """
+    Sum total for a given CustomerName
+    Returns: Name, Total
+    """
+    sql_statement = """
+    SELECT
+        (C.FirstName || ' ' || C.LastName) AS Name,
+        ROUND(CAST(SUM(P.ProductUnitPrice * O.QuantityOrdered) AS NUMERIC), 2) AS Total
+    FROM OrderDetail AS O
+    JOIN Customer AS C ON O.CustomerID = C.CustomerID
+    JOIN Product  AS P ON O.ProductID  = P.ProductID
+    WHERE (C.FirstName || ' ' || C.LastName) = %s
+    GROUP BY C.CustomerID, C.FirstName, C.LastName
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement, (CustomerName,))
+    return cur.fetchall()
+
+
+def ex3(conn):
+    """
+    Find the total for all customers
+    Returns: Name, Total (ordered by Total DESC)
+    """
+    sql_statement = """
+    SELECT
+        (C.FirstName || ' ' || C.LastName) AS Name,
+        ROUND(CAST(SUM(P.ProductUnitPrice * O.QuantityOrdered) AS NUMERIC), 2) AS Total
+    FROM OrderDetail O
+    JOIN Customer C ON O.CustomerID = C.CustomerID
+    JOIN Product  P ON O.ProductID  = P.ProductID
+    GROUP BY C.CustomerID, C.FirstName, C.LastName
+    ORDER BY Total DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex4(conn):
+    """
+    Find the total for all regions
+    Returns: Region, Total (ordered by Total DESC)
+    """
+    sql_statement = """
+    SELECT
+        R.Region AS Region,
+        ROUND(CAST(SUM(P.ProductUnitPrice * O.QuantityOrdered) AS NUMERIC), 2) AS Total
+    FROM OrderDetail O
+    JOIN Customer C ON O.CustomerID = C.CustomerID
+    JOIN Product  P ON O.ProductID  = P.ProductID
+    JOIN Country Y ON C.CountryID   = Y.CountryID
+    JOIN Region  R ON Y.RegionID    = R.RegionID
+    GROUP BY R.RegionID, R.Region
+    ORDER BY Total DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex5(conn):
+    """
+    Find the total for all countries
+    Returns: Country, Total (ordered by Total DESC)
+    """
+    sql_statement = """
+    SELECT
+        Y.Country AS Country,
+        ROUND(CAST(SUM(P.ProductUnitPrice * O.QuantityOrdered) AS NUMERIC), 0) AS Total
+    FROM OrderDetail O
+    JOIN Customer C ON O.CustomerID = C.CustomerID
+    JOIN Product  P ON O.ProductID  = P.ProductID
+    JOIN Country Y ON C.CountryID   = Y.CountryID
+    GROUP BY Y.CountryID, Y.Country
+    ORDER BY Total DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex6(conn):
+    """
+    Rank the countries within a region based on order total
+    Returns: Region, Country, CountryTotal, TotalRank
+    """
+    sql_statement = """
+    SELECT 
+        R.Region,
+        Y.Country,
+        ROUND(SUM(P.ProductUnitPrice * O.QuantityOrdered)) AS CountryTotal,
+        DENSE_RANK() OVER (PARTITION BY R.Region ORDER BY SUM(P.ProductUnitPrice * O.QuantityOrdered) DESC) AS TotalRank
+    FROM OrderDetail O
+    JOIN Customer C ON O.CustomerID = C.CustomerID
+    JOIN Product P ON O.ProductID = P.ProductID
+    JOIN Country Y ON C.CountryID = Y.CountryID
+    JOIN Region R ON Y.RegionID = R.RegionID
+    GROUP BY R.Region, Y.Country
+    ORDER BY R.Region ASC, CountryTotal DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex7(conn):
+    """
+    Rank countries within region, but only select the TOP country per region
+    Returns: Region, Country, CountryTotal, CountryRegionalRank
+    """
+    sql_statement = """
+    WITH CountryStats AS (
+        SELECT 
+            R.Region,
+            Y.Country,
+            ROUND(SUM(P.ProductUnitPrice * O.QuantityOrdered)) AS CountryTotal,
+            DENSE_RANK() OVER (PARTITION BY R.Region ORDER BY SUM(P.ProductUnitPrice * O.QuantityOrdered) DESC) AS CountryRegionalRank
+        FROM OrderDetail O
+        JOIN Customer C ON O.CustomerID = C.CustomerID
+        JOIN Product P ON O.ProductID = P.ProductID
+        JOIN Country Y ON C.CountryID = Y.CountryID
+        JOIN Region R ON Y.RegionID = R.RegionID
+        GROUP BY R.Region, Y.Country
+    )
+    SELECT 
+        Region,
+        Country,
+        CountryTotal,
+        CountryRegionalRank
+    FROM CountryStats
+    WHERE CountryRegionalRank = 1
+    ORDER BY Region ASC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex8(conn):
+    """
+    Sum customer sales by Quarter and year
+    Returns: Quarter, Year, CustomerID, Total
+    """
+    sql_statement = """
+    SELECT 
+        'Q' || EXTRACT(QUARTER FROM O.OrderDate)::TEXT AS Quarter,
+        EXTRACT(YEAR FROM O.OrderDate)::INTEGER AS Year,
+        O.CustomerID,
+        ROUND(SUM(P.ProductUnitPrice * O.QuantityOrdered)) AS Total
+    FROM OrderDetail O
+    JOIN Product P ON O.ProductID = P.ProductID
+    GROUP BY 
+        EXTRACT(QUARTER FROM O.OrderDate),
+        EXTRACT(YEAR FROM O.OrderDate),
+        O.CustomerID
+    ORDER BY Year ASC, Quarter ASC, O.CustomerID ASC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex9(conn):
+    """
+    Rank customer sales by Quarter and year, select top 5 customers per quarter
+    Returns: Quarter, Year, CustomerID, Total, CustomerRank
+    """
+    sql_statement = """
+    WITH CustomerSales AS (
+        SELECT 
+            'Q' || EXTRACT(QUARTER FROM O.OrderDate)::TEXT AS Quarter,
+            EXTRACT(YEAR FROM O.OrderDate)::INTEGER AS Year,
+            O.CustomerID,
+            ROUND(SUM(P.ProductUnitPrice * O.QuantityOrdered)) AS Total
+        FROM OrderDetail O
+        JOIN Product P ON O.ProductID = P.ProductID
+        GROUP BY 
+            EXTRACT(QUARTER FROM O.OrderDate),
+            EXTRACT(YEAR FROM O.OrderDate),
+            O.CustomerID
+    ),
+    RankedSales AS (
+        SELECT 
+            Quarter,
+            Year,
+            CustomerID,
+            Total,
+            DENSE_RANK() OVER (PARTITION BY Quarter, Year ORDER BY Total DESC) AS CustomerRank
+        FROM CustomerSales
+    )
+    SELECT 
+        Quarter,
+        Year,
+        CustomerID,
+        Total,
+        CustomerRank
+    FROM RankedSales
+    WHERE CustomerRank <= 5
+    ORDER BY Year ASC, Quarter ASC, Total DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex10(conn):
+    """
+    Rank the monthly sales
+    Returns: Month, Total, TotalRank
+    """
+    sql_statement = """
+    WITH Monthly_Sales_Data AS (
+        SELECT 
+            EXTRACT(MONTH FROM ord.OrderDate)::INTEGER AS Month_Index,
+            SUM(ROUND(prod.ProductUnitPrice * ord.QuantityOrdered)) AS Raw_Total
+        FROM OrderDetail ord
+        INNER JOIN Product prod ON ord.ProductID = prod.ProductID
+        GROUP BY EXTRACT(MONTH FROM ord.OrderDate)
+    )
+    SELECT 
+        CASE Month_Index
+            WHEN 1 THEN 'January'
+            WHEN 2 THEN 'February'
+            WHEN 3 THEN 'March'
+            WHEN 4 THEN 'April'
+            WHEN 5 THEN 'May'
+            WHEN 6 THEN 'June'
+            WHEN 7 THEN 'July'
+            WHEN 8 THEN 'August'
+            WHEN 9 THEN 'September'
+            WHEN 10 THEN 'October'
+            WHEN 11 THEN 'November'
+            WHEN 12 THEN 'December'
+        END AS Month,
+        CAST(Raw_Total AS FLOAT) AS Total,
+        RANK() OVER (ORDER BY Raw_Total DESC) AS TotalRank
+    FROM Monthly_Sales_Data
+    ORDER BY Total DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
+
+
+def ex11(conn):
+    """
+    Find the MaxDaysWithoutOrder for each customer
+    Returns: CustomerID, FirstName, LastName, Country, OrderDate, PreviousOrderDate, MaxDaysWithoutOrder
+    """
+    sql_statement = """
+    WITH OrderedOrders AS (
+        SELECT 
+            O.CustomerID,
+            O.OrderDate,
+            LAG(O.OrderDate, 1) OVER (PARTITION BY O.CustomerID ORDER BY O.OrderDate) AS PreviousOrderDate
+        FROM OrderDetail O
+    ),
+    Gaps AS (
+        SELECT 
+            CustomerID,
+            OrderDate,
+            PreviousOrderDate,
+            (OrderDate - PreviousOrderDate) AS DaysWithoutOrder
+        FROM OrderedOrders
+        WHERE PreviousOrderDate IS NOT NULL
+    ),
+    MaxGaps AS (
+        SELECT 
+            CustomerID,
+            OrderDate,
+            PreviousOrderDate,
+            DaysWithoutOrder,
+            ROW_NUMBER() OVER (PARTITION BY CustomerID ORDER BY DaysWithoutOrder DESC, OrderDate ASC) AS GapRank
+        FROM Gaps
+    )
+    SELECT 
+        M.CustomerID,
+        C.FirstName,
+        C.LastName,
+        Y.Country,
+        M.OrderDate,
+        M.PreviousOrderDate,
+        M.DaysWithoutOrder AS MaxDaysWithoutOrder
+    FROM MaxGaps M
+    JOIN Customer C ON M.CustomerID = C.CustomerID
+    JOIN Country Y ON C.CountryID = Y.CountryID
+    WHERE M.GapRank = 1
+    ORDER BY MaxDaysWithoutOrder DESC, M.CustomerID DESC
+    """
+    cur = conn.cursor()
+    cur.execute(sql_statement)
+    return cur.fetchall()
 
 
 # Main execution
 if __name__ == "__main__":
     
     DATABASE_URL = get_db_url()
+    
     # Create tables
     print("Creating tables...")
     conn = psycopg2.connect(DATABASE_URL)
@@ -396,39 +696,36 @@ if __name__ == "__main__":
     conn.close()
     print("Tables created successfully\n")
 
-    # Load staging data
-    print("Loading staging data...")
-    start_time = time.monotonic()
-    conn = psycopg2.connect(DATABASE_URL)
-    for name in FILES:
-        load_tsv_to_stage(
-            conn, 
-            FILES[name]["filename"], 
-            f"stage_{name}", 
-            EXPECTED_COLUMNS[name], 
-            FILES[name].get("batch_size", 5_000)
-        )
-    conn.close()
-    end_time = time.monotonic()
-    elapsed_time = end_time - start_time
-    print(f"\nStaging data loaded. Elapsed time: {elapsed_time:.2f} seconds\n")
+    # Check if data file exists
+    data_file = FILES["orders"]["filename"]
+    if not Path(data_file).exists():
+        print(f"\n⚠️  WARNING: Data file '{data_file}' not found!")
+        print("Please provide a TSV file with the following columns:")
+        print(", ".join(EXPECTED_COLUMNS))
+        print("\nDatabase schema has been created, but no data has been loaded.")
+    else:
+        # Build dimensions
+        print("Building dimension tables...")
+        conn = psycopg2.connect(DATABASE_URL)
+        build_dimensions_from_data(conn, data_file)
+        conn.close()
 
-    # Build dimensions
-    print("Building dimension tables...")
-    conn = psycopg2.connect(DATABASE_URL)
-    build_dimensions(conn)
-    conn.close()
+        # Load customers
+        print("Loading customers...")
+        conn = psycopg2.connect(DATABASE_URL)
+        load_customers(conn, data_file)
+        conn.close()
 
-    # Load entities
-    print("Loading entity tables...")
-    conn = psycopg2.connect(DATABASE_URL)
-    load_entities(conn)
-    conn.close()
+        # Load products
+        print("Loading products...")
+        conn = psycopg2.connect(DATABASE_URL)
+        load_products(conn, data_file)
+        conn.close()
 
-    # Build facts
-    print("Building fact tables...")
-    conn = psycopg2.connect(DATABASE_URL)
-    build_facts(conn)
-    conn.close()
-    
-    print("\n✅ Database migration complete!")
+        # Load orders
+        print("Loading orders...")
+        conn = psycopg2.connect(DATABASE_URL)
+        load_orders(conn, data_file)
+        conn.close()
+        
+        print("\n Database migration complete!")
