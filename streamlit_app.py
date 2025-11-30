@@ -9,8 +9,19 @@ import bcrypt
 
 
 def get_env_vars():
-    """Load environment variables fresh each time to avoid caching issues"""
-    load_dotenv(override=True)  # Force reload of .env file
+    """Load environment variables from st.secrets (Streamlit Cloud) or .env (local)"""
+    # Try Streamlit secrets first (for cloud deployment)
+    if hasattr(st, 'secrets') and len(st.secrets) > 0:
+        try:
+            return {
+                'api_key': st.secrets.get("OPENAI_API_KEY"),
+                'hashed_password': st.secrets.get("HASHED_PASSWORD", "").encode("utf-8") if st.secrets.get("HASHED_PASSWORD") else b""
+            }
+        except Exception:
+            pass
+    
+    # Fall back to .env file for local development
+    load_dotenv(override=True)
     return {
         'api_key': os.getenv("OPENAI_API_KEY"),
         'hashed_password': os.getenv("HASHED_PASSWORD", "").encode("utf-8")
@@ -104,12 +115,12 @@ def login_screen():
     if login_btn:
         if password:
             # Reload env vars fresh for authentication
-            load_dotenv(override=True)
-            hashed_pw = os.getenv("HASHED_PASSWORD", "").encode("utf-8")
+            env_vars = get_env_vars()
+            hashed_pw = env_vars['hashed_password']
             
             if not hashed_pw or len(hashed_pw) < 10:
-                st.error("❌ Configuration Error: HASHED_PASSWORD not set in .env file!")
-                st.info("Please add HASHED_PASSWORD to your .env file. Run `python debug_password.py` to generate and test one.")
+                st.error("❌ Configuration Error: HASHED_PASSWORD not set!")
+                st.info("For Streamlit Cloud: Add HASHED_PASSWORD to your app's Secrets. For local: Add to your .env file.")
             else:
                 try:
                     if bcrypt.checkpw(password.encode('utf-8'), hashed_pw):
@@ -145,7 +156,21 @@ def require_login():
 
 @st.cache_resource
 def get_db_url():
-    # Check if POSTGRES_SERVER is already a full URL
+    # Try Streamlit secrets first (for cloud deployment)
+    if hasattr(st, 'secrets') and len(st.secrets) > 0:
+        try:
+            POSTGRES_SERVER = st.secrets.get("POSTGRES_SERVER", "")
+            if POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://"):
+                return POSTGRES_SERVER
+            else:
+                POSTGRES_USERNAME = st.secrets.get("POSTGRES_USERNAME")
+                POSTGRES_PASSWORD = st.secrets.get("POSTGRES_PASSWORD")
+                POSTGRES_DATABASE = st.secrets.get("POSTGRES_DATABASE")
+                return f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}/{POSTGRES_DATABASE}"
+        except Exception:
+            pass
+    
+    # Fall back to .env for local development
     POSTGRES_SERVER = os.getenv("POSTGRES_SERVER", "")
     
     if POSTGRES_SERVER.startswith("postgresql://") or POSTGRES_SERVER.startswith("postgres://"):
