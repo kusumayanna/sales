@@ -103,7 +103,7 @@ python populate_db.py
 streamlit run streamlit_app.py
 ```
 
-The app will open in your browser at `[http://localhost:8501](https://salesgit-4t2gfasjgm2dijforpv5zc.streamlit.app/)`
+The app will open in your browser at `(https://salesgit-4t2gfasjgm2dijforpv5zc.streamlit.app/)`
 
 ## 🔐 Login Credentials
 
